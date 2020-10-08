@@ -606,15 +606,6 @@ CitusMaintenanceDaemonMain(Datum main_arg)
 			/* check for changed configuration */
 			if (myDbData->userOid != GetSessionUserId())
 			{
-				/*
-				 * Reset myDbData->daemonStarted so InitializeMaintenanceDaemonBackend()
-				 * notices this is a restart.
-				 */
-				LWLockAcquire(&MaintenanceDaemonControl->lock, LW_EXCLUSIVE);
-				myDbData->daemonStarted = false;
-				myDbData->workerPid = 0;
-				LWLockRelease(&MaintenanceDaemonControl->lock);
-
 				/* return code of 1 requests worker restart */
 				proc_exit(1);
 			}
@@ -726,8 +717,15 @@ MaintenanceDaemonShmemExit(int code, Datum arg)
 	MaintenanceDaemonDBData *myDbData = (MaintenanceDaemonDBData *)
 										hash_search(MaintenanceDaemonDBHash, &databaseOid,
 													HASH_FIND, NULL);
-	if (myDbData && myDbData->workerPid == MyProcPid)
+
+	/* myDbData is NULL after StopMaintenanceDaemon */
+	if (myDbData != NULL)
 	{
+		/*
+		 * Confirm that I am still the registered maintenance daemon before exiting.
+		 */
+		Assert(myDbData->workerPid == MyProcPid);
+
 		myDbData->daemonStarted = false;
 		myDbData->workerPid = 0;
 	}
