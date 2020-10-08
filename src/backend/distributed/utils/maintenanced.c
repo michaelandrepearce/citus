@@ -109,6 +109,9 @@ static HTAB *MaintenanceDaemonDBHash;
 static volatile sig_atomic_t got_SIGHUP = false;
 static volatile sig_atomic_t got_SIGTERM = false;
 
+/* set to true when becoming a maintenance daemon */
+static bool IsMaintenanceDaemon = false;
+
 static void MaintenanceDaemonSigTermHandler(SIGNAL_ARGS);
 static void MaintenanceDaemonSigHupHandler(SIGNAL_ARGS);
 static size_t MaintenanceDaemonShmemSize(void);
@@ -165,15 +168,31 @@ InitializeMaintenanceDaemonBackend(void)
 		return;
 	}
 
-	/* maintenance daemon can ignore itself */
-	if (dbData->workerPid == MyProcPid)
+	if (!found)
 	{
+		/* ensure the values in MaintenanceDaemonDBData are zero */
+		memset(((char *) dbData) + sizeof(Oid), 0,
+			   sizeof(MaintenanceDaemonDBData) - sizeof(Oid));
+	}
+
+	if (IsMaintenanceDaemon)
+	{
+		/*
+		 * InitializeMaintenanceDaemonBackend is called by the maintenance daemon
+		 * itself. In that case, we clearly don't need to start another maintenance
+		 * daemon.
+		 */
+		Assert(found);
+		Assert(dbData->workerPid == MyProcPid);
+
 		LWLockRelease(&MaintenanceDaemonControl->lock);
 		return;
 	}
 
 	if (!found || !dbData->daemonStarted)
 	{
+		Assert(dbData->workerPid == 0);
+
 		BackgroundWorker worker;
 		BackgroundWorkerHandle *handle = NULL;
 
@@ -325,6 +344,8 @@ CitusMaintenanceDaemonMain(Datum main_arg)
 	BackgroundWorkerUnblockSignals();
 
 	myDbData->latch = MyLatch;
+
+	IsMaintenanceDaemon = true;
 
 	LWLockRelease(&MaintenanceDaemonControl->lock);
 
